@@ -1,0 +1,636 @@
+openapi: 3.0.3
+info:
+  title: Malawi Blog API
+  version: 1.0.0
+  description: |
+    REST API for the ELE-IWS-521 React blog platform (Express + PostgreSQL on Supabase).
+
+    **Authentication:** send `Authorization: Bearer <token>` (the token comes from register/login).
+    **Roles:** `reader` can like and comment. `author` can also write posts and sees a dashboard.
+    `admin` can moderate any post or comment and manage users. The server enforces all of this.
+    **Errors** always look like `{ "error": { "message": "...", "details": [...] } }`.
+servers:
+  - url: http://localhost:4000/api
+    description: Local development
+tags:
+  - name: Auth
+  - name: Posts
+  - name: Likes
+  - name: Comments
+  - name: Tags
+  - name: Dashboard
+  - name: Admin
+  - name: Uploads
+  - name: System
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer, example: 2 }
+        name: { type: string, example: Chikondi Banda }
+        email: { type: string, example: chikondi@example.com }
+        role: { type: string, enum: [reader, author, admin], example: author }
+    Author:
+      type: object
+      properties:
+        id: { type: integer, example: 2 }
+        name: { type: string, example: Chikondi Banda }
+    Post:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        title: { type: string, example: Surviving load-shedding as a student in Blantyre }
+        excerpt: { type: string, example: Blackouts do not care about deadlines. }
+        content: { type: string, description: Raw Markdown (only on the single-post endpoints), example: "## Plan around the power\n- Charge everything when the lights are on." }
+        coverImageUrl: { type: string, nullable: true, example: "https://xyz.supabase.co/storage/v1/object/public/covers/1700000000-abc.webp" }
+        status: { type: string, enum: [draft, published], example: published }
+        viewCount: { type: integer, example: 34 }
+        publishedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/Author' }
+        tags:
+          type: array
+          items: { type: string }
+          example: [load-shedding, energy]
+        likeCount: { type: integer, example: 3 }
+        commentCount: { type: integer, example: 3 }
+        likedByMe: { type: boolean, example: false }
+    PostInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string, minLength: 3, maxLength: 150, example: My first post }
+        excerpt: { type: string, maxLength: 300, example: A short summary shown in the feed. }
+        content: { type: string, maxLength: 50000, example: "# Hello\nThis is **Markdown**." }
+        coverImageUrl: { type: string, nullable: true, example: "https://example.com/cover.webp" }
+        status: { type: string, enum: [draft, published], default: draft, example: published }
+        tags:
+          type: array
+          maxItems: 5
+          items: { type: string, minLength: 2, maxLength: 30 }
+          example: [campus-life, students]
+    Comment:
+      type: object
+      properties:
+        id: { type: integer, example: 10 }
+        parentId: { type: integer, nullable: true, example: null }
+        body: { type: string, example: 'Great tips, thank you!' }
+        createdAt: { type: string, format: date-time }
+        author:
+          type: object
+          properties:
+            id: { type: integer, example: 4 }
+            name: { type: string, example: Mphatso Kamanga }
+            role: { type: string, example: reader }
+        replies:
+          type: array
+          items: { type: object }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 6 }
+        total: { type: integer, example: 5 }
+        totalPages: { type: integer, example: 1 }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+    LikeSummary:
+      type: object
+      properties:
+        likeCount: { type: integer, example: 4 }
+        liked: { type: boolean, example: true }
+
+  parameters:
+    PostId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+      example: 1
+
+  responses:
+    ValidationError:
+      description: Input failed validation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              message: Validation failed
+              details:
+                - { field: password, message: Password must be at least 8 characters }
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { message: Authentication required } }
+    Forbidden:
+      description: Logged in, but not allowed to do this
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { message: You can only edit your own posts } }
+    NotFound:
+      description: Resource does not exist (or is a draft you may not see)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: { message: Post not found } }
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Health check (also pings the database)
+      responses:
+        '200':
+          description: API and database are up
+          content:
+            application/json:
+              example: { status: ok }
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create an account (reader or author)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { name: Chikondi Banda, email: chikondi@example.com, password: Password123, role: author }
+      responses:
+        '201':
+          description: Account created; token returned
+          content:
+            application/json:
+              example:
+                user: { id: 2, name: Chikondi Banda, email: chikondi@example.com, role: author }
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              example: { error: { message: An account with that email already exists } }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in (rate limited - 10 failed attempts per 15 minutes per IP)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { email: chikondi@example.com, password: Password123 }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              example:
+                user: { id: 2, name: Chikondi Banda, email: chikondi@example.com, role: author }
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        '401':
+          description: Wrong email or password (same message for both, on purpose)
+          content:
+            application/json:
+              example: { error: { message: Invalid email or password } }
+        '429':
+          description: Too many failed attempts
+          content:
+            application/json:
+              example: { error: { message: Too many failed login attempts. Try again in 15 minutes. } }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Who am I? (used on page load to restore the session)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: The logged-in user
+          content:
+            application/json:
+              example: { user: { id: 2, name: Chikondi Banda, email: chikondi@example.com, role: author } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /posts:
+    get:
+      tags: [Posts]
+      summary: Public feed of published posts (pagination, search, tag filter)
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 }, example: 1 }
+        - { name: limit, in: query, schema: { type: integer, default: 6, maximum: 20 }, example: 6 }
+        - { name: q, in: query, description: 'Searches title, excerpt and content', schema: { type: string }, example: blackout }
+        - { name: tag, in: query, schema: { type: string }, example: energy }
+        - { name: author, in: query, description: Author user id, schema: { type: integer }, example: 2 }
+      responses:
+        '200':
+          description: One page of posts (no `content` field in the list)
+          content:
+            application/json:
+              example:
+                data:
+                  - id: 1
+                    title: Surviving load-shedding as a student in Blantyre
+                    excerpt: Blackouts do not care about deadlines.
+                    coverImageUrl: null
+                    status: published
+                    viewCount: 34
+                    publishedAt: '2026-10-11T08:00:00.000Z'
+                    createdAt: '2026-10-11T08:00:00.000Z'
+                    updatedAt: '2026-10-11T08:00:00.000Z'
+                    author: { id: 2, name: Chikondi Banda }
+                    tags: [campus-life, energy, load-shedding]
+                    likeCount: 3
+                    commentCount: 3
+                    likedByMe: false
+                pagination: { page: 1, limit: 6, total: 5, totalPages: 1 }
+        '400': { $ref: '#/components/responses/ValidationError' }
+    post:
+      tags: [Posts]
+      summary: Create a post (author or admin)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostInput' }
+            example:
+              title: Surviving load-shedding as a student in Blantyre
+              excerpt: Blackouts do not care about deadlines.
+              content: "## Plan around the power\nCharge everything when the lights are on."
+              coverImageUrl: null
+              status: published
+              tags: [campus-life, energy]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              example:
+                post:
+                  id: 7
+                  title: My first post
+                  excerpt: A short summary shown in the feed.
+                  content: "# Hello\nThis is **Markdown**."
+                  coverImageUrl: null
+                  status: published
+                  viewCount: 0
+                  publishedAt: '2026-10-13T10:00:00.000Z'
+                  createdAt: '2026-10-13T10:00:00.000Z'
+                  updatedAt: '2026-10-13T10:00:00.000Z'
+                  author: { id: 2, name: Chikondi Banda }
+                  tags: [campus-life, students]
+                  likeCount: 0
+                  commentCount: 0
+                  likedByMe: false
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /posts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    get:
+      tags: [Posts]
+      summary: Read one post (drafts only for their author and admins). Counts a view.
+      description: Send the token (optional) to get a correct `likedByMe`.
+      responses:
+        '200':
+          description: The post, including Markdown content
+          content:
+            application/json:
+              example:
+                post:
+                  id: 1
+                  title: Surviving load-shedding as a student in Blantyre
+                  excerpt: Blackouts do not care about deadlines.
+                  content: "## Plan around the power\n- Charge everything when the lights are on."
+                  coverImageUrl: null
+                  status: published
+                  viewCount: 35
+                  publishedAt: '2026-10-11T08:00:00.000Z'
+                  createdAt: '2026-10-11T08:00:00.000Z'
+                  updatedAt: '2026-10-11T08:00:00.000Z'
+                  author: { id: 2, name: Chikondi Banda }
+                  tags: [campus-life, energy, load-shedding]
+                  likeCount: 3
+                  commentCount: 3
+                  likedByMe: true
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Posts]
+      summary: Replace a post (its author, or an admin)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PostInput' }
+            example: { title: My first post (edited), excerpt: Updated summary., content: "# Hello again", status: published, tags: [students] }
+      responses:
+        '200':
+          description: Updated post (same shape as GET /posts/{id})
+          content:
+            application/json:
+              example: { post: { id: 7, title: My first post (edited), status: published, tags: [students] } }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Posts]
+      summary: Delete a post (its author, or an admin)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: Post deleted successfully; no response body is returned (204 No Content). }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /posts/{id}/like:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    post:
+      tags: [Likes]
+      summary: Like a post (idempotent - one like per user per post, enforced by the database)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current like state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LikeSummary' }
+              example: { likeCount: 4, liked: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Likes]
+      summary: Remove your like
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Current like state
+          content:
+            application/json:
+              example: { likeCount: 3, liked: false }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /posts/{id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/PostId'
+    get:
+      tags: [Comments]
+      summary: Comments on a published post, with one level of replies nested
+      responses:
+        '200':
+          description: Top-level comments, each with a `replies` array
+          content:
+            application/json:
+              example:
+                data:
+                  - id: 10
+                    parentId: null
+                    body: Do you know if the library keeps its power on during outages?
+                    createdAt: '2026-10-12T09:00:00.000Z'
+                    author: { id: 5, name: Tiyamike Mwale, role: reader }
+                    replies:
+                      - id: 11
+                        parentId: 10
+                        body: Not always, so I keep a charged laptop as a backup.
+                        createdAt: '2026-10-12T09:30:00.000Z'
+                        author: { id: 2, name: Chikondi Banda, role: author }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Comments]
+      summary: Add a comment, or a reply (give `parentId` of a top-level comment)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { body: Thanks for the tips!, parentId: 10 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              example:
+                comment:
+                  id: 12
+                  parentId: 10
+                  body: Thanks for the tips!
+                  createdAt: '2026-10-13T11:00:00.000Z'
+                  author: { id: 4, name: Mphatso Kamanga, role: reader }
+                  replies: []
+        '400':
+          description: Validation failed, or reply to a reply (only one level allowed)
+          content:
+            application/json:
+              example: { error: { message: Replies can only be one level deep } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /comments/{id}:
+    delete:
+      tags: [Comments]
+      summary: Delete a comment and its replies (the comment's owner, or an admin)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer }, example: 12 }
+      responses:
+        '204': { description: Comment and its replies deleted successfully; no response body is returned (204 No Content). }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Not your comment
+          content:
+            application/json:
+              example: { error: { message: You can only delete your own comments } }
+        '404':
+          description: Comment not found
+          content:
+            application/json:
+              example: { error: { message: Comment not found } }
+
+  /tags:
+    get:
+      tags: [Tags]
+      summary: Tags that have at least one published post, most used first
+      responses:
+        '200':
+          description: Tag list
+          content:
+            application/json:
+              example:
+                data:
+                  - { name: campus-life, postCount: 2 }
+                  - { name: energy, postCount: 1 }
+
+  /dashboard/posts:
+    get:
+      tags: [Dashboard]
+      summary: The logged-in author's posts with views, likes and comment counts
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Per-post stats and totals
+          content:
+            application/json:
+              example:
+                posts:
+                  - id: 1
+                    title: Surviving load-shedding as a student in Blantyre
+                    status: published
+                    publishedAt: '2026-10-11T08:00:00.000Z'
+                    updatedAt: '2026-10-11T08:00:00.000Z'
+                    views: 34
+                    likes: 3
+                    comments: 3
+                totals: { posts: 3, views: 90, likes: 6, comments: 4 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/users:
+    get:
+      tags: [Admin]
+      summary: List all users (admin only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Users with post counts
+          content:
+            application/json:
+              example:
+                data:
+                  - { id: 1, name: Site Admin, email: admin@example.com, role: admin, createdAt: '2026-10-01T08:00:00.000Z', postCount: 0 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/users/{id}/role:
+    patch:
+      tags: [Admin]
+      summary: Change a user's role (admin only; you cannot demote yourself)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer }, example: 4 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { role: author }
+      responses:
+        '200':
+          description: Updated user
+          content:
+            application/json:
+              example: { user: { id: 4, name: Mphatso Kamanga, email: mphatso@example.com, role: author } }
+        '400':
+          description: Invalid role, or trying to remove your own admin role
+          content:
+            application/json:
+              example: { error: { message: You cannot remove your own admin role } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404':
+          description: User not found
+          content:
+            application/json:
+              example: { error: { message: User not found } }
+
+  /admin/posts:
+    get:
+      tags: [Admin]
+      summary: Latest 100 posts of any status, for moderation (admin only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Posts (delete with DELETE /posts/{id})
+          content:
+            application/json:
+              example:
+                data:
+                  - { id: 6, title: "Draft: why our team chose React", status: draft, author: { id: 3, name: Thandiwe Phiri }, tags: [react], createdAt: '2026-10-13T08:00:00.000Z' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/comments:
+    get:
+      tags: [Admin]
+      summary: Latest 50 comments across all posts, for moderation (admin only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Comments (delete with DELETE /comments/{id})
+          content:
+            application/json:
+              example:
+                data:
+                  - id: 12
+                    body: Thanks for the tips!
+                    createdAt: '2026-10-13T11:00:00.000Z'
+                    parentId: 10
+                    postId: 1
+                    postTitle: Surviving load-shedding as a student in Blantyre
+                    author: { id: 4, name: Mphatso Kamanga }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /uploads/cover:
+    post:
+      tags: [Uploads]
+      summary: Upload a cover image (author or admin). Resized to 1200px wide and converted to WebP.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        description: 'Example: curl -X POST /api/uploads/cover -H "Authorization: Bearer <token>" -F "image=@cover.jpg"'
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image: { type: string, format: binary, description: 'JPEG, PNG or WebP, max 5 MB' }
+            example:
+              image: "<binary JPEG, PNG or WebP file; for example, cover.jpg>"
+      responses:
+        '201':
+          description: Public URL of the compressed image
+          content:
+            application/json:
+              example: { url: "https://xyz.supabase.co/storage/v1/object/public/covers/1700000000-abc.webp", bytes: 48213 }
+        '400':
+          description: Missing file, wrong type, or not a real image
+          content:
+            application/json:
+              example: { error: { message: That file is not a valid image } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413':
+          description: File larger than 5 MB
+          content:
+            application/json:
+              example: { error: { message: Image is too large (max 5 MB) } }

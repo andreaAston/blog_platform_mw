@@ -6,7 +6,7 @@ A blog with a **React** frontend, a **Node.js / Express REST API with JWT authen
 | | Link |
 |---|---|
 | Live site (Vercel) | _Add after deployment_ |
-| API (Render) | _Add after deployment_ |
+| API (Vercel) | _Add public backend URL after deployment_ |
 | API docs (Swagger UI) | `http://localhost:4000/api/docs` locally; add the deployed URL after deployment |
 | Framework research | [`docs/FRAMEWORK_RESEARCH.md`](./docs/FRAMEWORK_RESEARCH.md) |
 | Presentation (12 slides) | [Full-Stack React Blog Platform — Presentation.pptx](<./Full-Stack React Blog Platform — Presentation.pptx>) |
@@ -22,6 +22,87 @@ Put each member's name beside their workstream before submission. The folder own
 | _Name_ | Frontend - React UI, interactions and client tests | |
 | _Name_ | Backend - Express API, authentication and API tests | |
 | _Name_ | Database - PostgreSQL schema, constraints, seed data and data access | |
+
+## Team collaboration (three members)
+
+Use this repository as the team's **single source of truth**. Do not create another repository with empty placeholder files: the working frontend, backend, and database schema are already here.
+
+### Give access and clone the repository
+
+The repository owner invites the other two members as GitHub collaborators. Each member clones the same repository in the VS Code terminal:
+
+```powershell
+git clone https://github.com/andreaAston/blog_platform_mw.git
+cd blog_platform_mw
+git switch -c feature/short-description
+```
+
+Choose a descriptive branch name, such as `feature/feed-filter` or `fix/register-validation`. For an existing clone, update `main` before creating a new task branch:
+
+```powershell
+git switch main
+git pull
+git switch -c feature/short-description
+```
+
+### Agree on ownership
+
+- **Frontend member:** primary owner of `frontend/`.
+- **Backend member:** primary owner of `backend/src/` and `backend/openapi.yaml`.
+- **Database member:** primary owner of `database/`, `backend/src/db.js`, and `backend/scripts/seed.js`.
+
+The database and backend members agree before changing how an endpoint reads or writes data. The backend and frontend members agree on request and response shapes before changing the API contract. Keep one primary editor per file where possible, and review shared-file changes together.
+
+### Set up local environments
+
+Each member installs dependencies and creates their own ignored environment files:
+
+```powershell
+cd backend
+npm install
+Copy-Item .env.example .env
+```
+
+Fill `backend/.env` with the database URL, SSL setting, and a private JWT secret. In a second terminal from the repository root, set up the frontend:
+
+```powershell
+cd frontend
+npm install
+Copy-Item .env.example .env
+```
+
+For local development, set `VITE_API_URL=http://localhost:4000/api` in `frontend/.env`. Use private local environment values; never share `.env` files or commit them. Only `.env.example` files with placeholders belong in Git.
+
+Agree how the team will access PostgreSQL before testing. `database/schema.sql` drops and recreates tables, so never run it against a shared demo/production database. Run API tests only against a disposable database configured with `TEST_DATABASE_URL`.
+
+### Run the app
+
+Start the backend from `backend/`:
+
+```powershell
+npm run dev
+```
+
+Start the frontend in a second terminal from `frontend/`:
+
+```powershell
+npm run dev
+```
+
+Open the frontend URL printed by Vite (normally `http://localhost:5173`). Keep the hostname consistent with the backend's `CLIENT_ORIGIN`; `localhost` and `127.0.0.1` are different browser origins. The API health check is `http://localhost:4000/api/health`.
+
+### Commit and open a pull request
+
+Run the focused test or build for your change, then review what will be committed:
+
+```powershell
+git status
+git add path\to\changed-file
+git commit -m "Describe the change"
+git push -u origin feature/short-description
+```
+
+Open a Pull Request on GitHub into `main`. Explain the behavior changed, list the files touched, report checks run, and ask another member to review before merging. After merge, update local `main` before the next task. Avoid direct pushes to `main` and commits containing `.env`, credentials, `node_modules/`, or build output.
 
 ## Features
 
@@ -40,7 +121,7 @@ Put each member's name beside their workstream before submission. The folder own
 2. Optimistic updates with rollback - likes and comments
 3. Draft autosave that survives a page refresh and a dropped connection
 
-Public deployment is still pending; count it as a challenge feature only after both the frontend and API are live and secrets are configured in the hosting environment.
+Count public deployment as a challenge feature only after both the frontend and API are publicly reachable and secrets are configured in the hosting environment.
 
 **Built for phones and limited data:** mobile-first CSS, images resized to max 1200 px and converted to WebP on upload, native lazy loading,
 pagination instead of loading every post, route-level code splitting, no web fonts.
@@ -52,7 +133,7 @@ flowchart LR
   subgraph Browser
     A[React SPA<br/>React Router, hooks, Context]
   end
-  subgraph Render
+  subgraph Vercel
     B[Express API<br/>helmet, CORS, rate limit<br/>JWT auth, role checks, zod]
   end
   subgraph Supabase
@@ -195,14 +276,15 @@ Run the API tests only with a disposable test database configured through `TEST_
 Known trade-off: the token is kept in `localStorage` so it survives refreshes; this is simple but readable by injected scripts, which is why the XSS defences matter.
 A production site might use an httpOnly cookie instead.
 
-## Deploy (free tiers)
+## Deploy (Vercel frontend and backend)
 
-1. **Database** - already on Supabase.
-2. **API on Render** - New Web Service from this repo, *Root directory* `backend`, *Build command* `npm install`, *Start command* `npm start`.
-   Add the environment variables from the table above (`NODE_ENV=production`, `DATABASE_SSL=true`, `CLIENT_ORIGIN=<your Vercel URL>`). Free instances sleep when idle, so the first request after a break can take about a minute - open the site before your demo.
-3. **React app on Vercel** - Import the repo, *Root directory* `frontend`, framework preset Vite, environment variable `VITE_API_URL=https://<your-render-app>.onrender.com/api`. `frontend/vercel.json` makes page refreshes on routes like `/post/3` work.
-4. From `backend/`, run the seed once against the production database (`NODE_ENV=production npm run seed -- --force`), then **change the demo passwords**.
-5. Put the live links at the top of this file.
+The frontend and Express API are separate Vercel projects connected to this repository. Set the **Root Directory** to `frontend` for the Vite app and `backend` for the Express API.
+
+Set backend variables in the backend Vercel project only: `DATABASE_URL` (Supabase PostgreSQL connection string, preferably the Session pooler), `DATABASE_SSL=true`, `JWT_SECRET`, and `CLIENT_ORIGIN` (the exact public frontend origin). For image uploads, also set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_BUCKET=covers`. Never put backend secrets in the frontend project.
+
+Set `VITE_API_URL=https://<public-backend-domain>/api` in the frontend Vercel project. If Deployment Protection requires visitors to log in to Vercel to reach the backend, browser requests from the public frontend will fail; make the production API deployment publicly accessible. After environment-variable changes, redeploy the affected project. Verify `https://<public-backend-domain>/api/health` returns `{"status":"ok"}` and add the public site/API links to the table at the top.
+
+Do not run the destructive schema script or seed command against a shared production/demo database unless the team has explicitly agreed and taken precautions.
 
 ## Project structure
 

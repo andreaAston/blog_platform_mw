@@ -15,13 +15,13 @@ A blog with a **React** frontend, a **Node.js / Express REST API with JWT authen
 
 ## Team
 
-Put each member's name beside their workstream before submission. The folder ownership and three-member option are in [`docs/TEAM_PLAN.md`](./docs/TEAM_PLAN.md).
+The three members and their primary workstreams are:
 
 | Member | Workstream | Commits |
 |---|---|---|
-| _Name_ | Frontend - React UI, interactions and client tests | |
-| _Name_ | Backend - Express API, authentication and API tests | |
-| _Name_ | Database - PostgreSQL schema, constraints, seed data and data access | |
+| Andrea | Backend - Express API, authentication and API tests | |
+| Uchindami | Frontend - React UI, interactions and client tests | |
+| Annie Thomas | Database design, schema and seed data; research lead | |
 
 ## Team collaboration (three members)
 
@@ -47,9 +47,9 @@ git switch -c feature/short-description
 
 ### Agree on ownership
 
-- **Frontend member:** primary owner of `frontend/`.
-- **Backend member:** primary owner of `backend/src/` and `backend/openapi.yaml`.
-- **Database member:** primary owner of `database/`, `backend/src/db.js`, and `backend/scripts/seed.js`.
+- **Andrea - Backend:** primary owner of `backend/src/` and `backend/openapi.yaml`.
+- **Uchindami - Frontend:** primary owner of `frontend/`.
+- **Annie Thomas - Database design and research lead:** primary owner of `database/`, `backend/src/db.js`, and `backend/scripts/seed.js`; coordinates the framework/technology research and related documentation.
 
 The database and backend members agree before changing how an endpoint reads or writes data. The backend and frontend members agree on request and response shapes before changing the API contract. Keep one primary editor per file where possible, and review shared-file changes together.
 

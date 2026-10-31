@@ -212,9 +212,11 @@ Requirements: Node.js 20 or newer, a Supabase account (free) _or_ a local Postgr
 cd backend
 npm install
 cp .env.example .env        # then fill in the values below
-npm run seed                # demo users, tags, 5 posts, comments, likes
+npm run seed                # demo users, tags, 6 posts, comments, likes
 npm run dev                 # http://localhost:4000  (docs: /api/docs)
 ```
+
+`npm run seed` is additive and repeat-safe: it preserves existing records, skips matching demo records, and adds only missing sample users/posts/tags/comments/replies/likes. It does not replace existing account passwords or roles. Review the script before using it on a shared database.
 
 | Variable | Meaning |
 |---|---|

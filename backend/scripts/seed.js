@@ -1,4 +1,4 @@
-// Fills the database with demo data.  Usage: npm run seed
+// Adds missing demo data without deleting existing records. Usage: npm run seed
 // Run `npm run db:schema` first (or paste database/schema.sql into the Supabase SQL editor).
 const bcrypt = require('bcryptjs');
 const config = require('../src/config');
@@ -180,60 +180,115 @@ const LIKES = [
 
 (async () => {
   if (config.isProd && !process.argv.includes('--force')) {
-    console.error('Refusing to wipe a production database. Re-run with --force if you really mean it.');
+    console.error('Refusing to seed a production database. Re-run with --force if you really mean it.');
     process.exit(1);
   }
 
-  await withTransaction(async (db) => {
-    await db.query('truncate likes, comments, post_tags, tags, posts, users restart identity cascade');
+  const added = { users: 0, posts: 0, tags: 0, comments: 0, replies: 0, likes: 0 };
 
+  await withTransaction(async (db) => {
     const ids = {};
     for (const u of USERS) {
       const hash = await bcrypt.hash(u.password, 10);
-      const { rows } = await db.query(
-        'insert into users (name, email, password_hash, role) values ($1, $2, $3, $4) returning id',
+      const { rows: inserted } = await db.query(
+        `insert into users (name, email, password_hash, role)
+         values ($1, $2, $3, $4)
+         on conflict (email) do nothing
+         returning id, role`,
         [u.name, u.email, hash, u.role]
       );
-      ids[u.key] = rows[0].id;
+      const { rows: existing } = inserted.length
+        ? { rows: inserted }
+        : await db.query('select id, role from users where email = $1', [u.email]);
+      if (!existing.length) throw new Error(`Could not find seed account ${u.email}`);
+      if (existing[0].role !== u.role) {
+        throw new Error(`Existing account ${u.email} has role "${existing[0].role}", expected "${u.role}". No data was changed.`);
+      }
+      if (inserted.length) added.users += 1;
+      ids[u.key] = existing[0].id;
     }
 
     const postIds = [];
     for (const p of POSTS) {
       const status = p.status || 'published';
-      const { rows } = await db.query(
+      const { rows: existing } = await db.query(
+        'select id from posts where author_id = $1 and title = $2 order by id limit 1',
+        [ids[p.author], p.title]
+      );
+      let postId;
+      if (existing.length) {
+        postId = existing[0].id;
+      } else {
+        const { rows } = await db.query(
         `insert into posts (author_id, title, excerpt, content, status, published_at, view_count, created_at)
          values ($1, $2, $3, $4, $5::post_status, case when $5 = 'published' then now() - ($6 || ' days')::interval end,
                  $7, now() - ($6 || ' days')::interval)
          returning id`,
-        [ids[p.author], p.title, p.excerpt, p.content, status, String(p.daysAgo), status === 'published' ? 20 + p.daysAgo * 7 : 0]
-      );
-      postIds.push(rows[0].id);
+          [ids[p.author], p.title, p.excerpt, p.content, status, String(p.daysAgo), status === 'published' ? 20 + p.daysAgo * 7 : 0]
+        );
+        postId = rows[0].id;
+        added.posts += 1;
+      }
+      postIds.push(postId);
       for (const tag of p.tags) {
-        await db.query('insert into tags (name) values ($1) on conflict (name) do nothing', [tag]);
-        await db.query('insert into post_tags (post_id, tag_id) select $1, id from tags where name = $2', [rows[0].id, tag]);
+        const { rowCount } = await db.query(
+          'insert into tags (name) values ($1) on conflict (name) do nothing',
+          [tag]
+        );
+        added.tags += rowCount;
+        await db.query(
+          `insert into post_tags (post_id, tag_id)
+           select $1, id from tags where name = $2
+           on conflict (post_id, tag_id) do nothing`,
+          [postId, tag]
+        );
       }
     }
 
     const commentIds = [];
     for (const c of COMMENTS) {
-      const { rows } = await db.query(
-        'insert into comments (post_id, user_id, body) values ($1, $2, $3) returning id',
+      const { rows: existing } = await db.query(
+        'select id from comments where post_id = $1 and user_id = $2 and parent_id is null and body = $3 order by id limit 1',
         [postIds[c.post], ids[c.user], c.body]
       );
-      commentIds.push(rows[0].id);
+      if (existing.length) {
+        commentIds.push(existing[0].id);
+      } else {
+        const { rows } = await db.query(
+          'insert into comments (post_id, user_id, body) values ($1, $2, $3) returning id',
+          [postIds[c.post], ids[c.user], c.body]
+        );
+        commentIds.push(rows[0].id);
+        added.comments += 1;
+      }
     }
     for (const r of REPLIES) {
-      await db.query('insert into comments (post_id, user_id, parent_id, body) values ($1, $2, $3, $4)', [
-        postIds[r.post], ids[r.user], commentIds[r.parentIndex], r.body,
-      ]);
+      const parentId = commentIds[r.parentIndex];
+      const { rows: existing } = await db.query(
+        'select id from comments where post_id = $1 and user_id = $2 and parent_id = $3 and body = $4 order by id limit 1',
+        [postIds[r.post], ids[r.user], parentId, r.body]
+      );
+      if (!existing.length) {
+        await db.query(
+          'insert into comments (post_id, user_id, parent_id, body) values ($1, $2, $3, $4)',
+          [postIds[r.post], ids[r.user], parentId, r.body]
+        );
+        added.replies += 1;
+      }
     }
     for (const [user, post] of LIKES) {
-      await db.query('insert into likes (user_id, post_id) values ($1, $2)', [ids[user], postIds[post]]);
+      const { rowCount } = await db.query(
+        'insert into likes (user_id, post_id) values ($1, $2) on conflict (user_id, post_id) do nothing',
+        [ids[user], postIds[post]]
+      );
+      added.likes += rowCount;
     }
   });
 
-  console.log('Seeded. Demo logins:');
-  USERS.forEach((u) => console.log(`  ${u.role.padEnd(7)} ${u.email.padEnd(24)} ${u.password}`));
+  console.log('Seed complete. Existing data was preserved; existing matching seed records were skipped.');
+  console.log(`Added: ${JSON.stringify(added)}`);
+  console.log('Demo logins (only newly created accounts have these passwords):');
+  USERS.forEach((u) => console.log(`  ${u.role.padEnd(7)} ${u.email}`));
   await pool.end();
 })().catch((err) => {
   console.error(err);
